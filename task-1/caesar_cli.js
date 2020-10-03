@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { pipeline } = require('stream');
 
 const Encoder = require('./Encoder');
 const EncryptStream = require('./EncryptStream');
@@ -6,8 +7,7 @@ const {
   messages,
   isFileNameProvided,
   isFileExist,
-  checkProvidedOptions,
-  makePipeline
+  checkProvidedOptions
 } = require('./helper');
 
 const { argv } = require('yargs');
@@ -25,7 +25,7 @@ if (
   (isFileNameProvided(outputFile) && !isFileExist(outputFile))
 ) {
   stderr.write(messages.noFileExist);
-  return;
+  process.exit(9);
 }
 
 // Check action and shift arguments
@@ -39,14 +39,15 @@ if (!isFileNameProvided(inputFile)) {
   stdout.write('Please input the text you want to encode/decode:\n');
 
   stdin.on('readable', () => {
-    const data = stdin.read();
+    let data = stdin.read();
 
     if (data) {
       const ecryptedData = encoder.encrypt(data);
 
       if (isFileNameProvided(outputFile)) {
         const writeableStream = fs.createWriteStream(
-          `${__dirname}/${outputFile}`
+          `${__dirname}/${outputFile}`,
+          { flags: 'a' }
         );
         writeableStream.write(ecryptedData);
         stdout.write(messages.success(outputFile));
@@ -54,8 +55,8 @@ if (!isFileNameProvided(inputFile)) {
         stdout.write(messages.result(ecryptedData));
       }
     }
+    data = stdin.read();
   });
-
   stdin.setEncoding('utf8');
   stdin.resume();
 
@@ -68,14 +69,31 @@ if (!isFileNameProvided(outputFile)) {
     `${__dirname}/${inputFile}`,
     'utf8'
   );
+
   stdout.write(messages.result());
 
-  makePipeline(readableStream, transformStream, stdout);
+  readableStream.on('data', chunk => {
+    const ecryptedData = encoder.encrypt(chunk);
+    stdout.write(ecryptedData);
+  });
+
+  readableStream.on('end', () => {
+    stdout.write(messages.done);
+  });
+
   return;
 }
 
 // Both files are provided
 const readableStream = fs.createReadStream(`${__dirname}/${inputFile}`, 'utf8');
-const writeableStream = fs.createWriteStream(`${__dirname}/${outputFile}`);
+const writeableStream = fs.createWriteStream(`${__dirname}/${outputFile}`, {
+  flags: 'a'
+});
 
-makePipeline(readableStream, transformStream, writeableStream, outputFile);
+pipeline(readableStream, transformStream, writeableStream, err => {
+  if (err) {
+    stderr.write(messages.pipelineError);
+  } else {
+    stdout.write(messages.success(outputFile));
+  }
+});
